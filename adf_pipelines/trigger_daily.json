@@ -1,0 +1,26 @@
+// adf_pipelines/trigger_daily.json
+{
+  "name": "TR_Daily_7h_Brasilia",
+  "properties": {
+    "type": "ScheduleTrigger",
+    "typeProperties": {
+      "recurrence": {
+        "frequency": "Day",
+        "interval": 1,
+        "schedule": {
+          "hours": [7],
+          "minutes": [0],
+          "timeZone": "E. South America Standard Time"
+        }
+      }
+    },
+    "pipelines": [
+      {
+        "pipelineReference": {
+          "type": "PipelineReference",
+          "referenceName": "PL_RealEstate_FullIngestion"
+        }
+      }
+    ]
+  }
+}

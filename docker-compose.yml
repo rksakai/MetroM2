@@ -1,0 +1,50 @@
+# docker-compose.yml
+version: "3.9"
+
+services:
+  api:
+    build: .
+    container_name: real_estate_api
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=dev
+      - AZURE_STORAGE_ACCOUNT=\${AZURE_STORAGE_ACCOUNT}
+      - KEY_VAULT_URI=\${KEY_VAULT_URI}
+    volumes:
+      - .:/app
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  dashboard:
+    build: .
+    container_name: real_estate_dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - API_URL=http://api:8000
+      - ENVIRONMENT=dev
+    depends_on:
+      - api
+    command: streamlit run dashboard/app.py --server.port 8501 --server.address 0.0.0.0
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.13.0
+    container_name: mlflow_server
+    ports:
+      - "5000:5000"
+    command: >
+      mlflow server
+      --backend-store-uri sqlite:///mlflow.db
+      --default-artifact-root /mlruns
+      --host 0.0.0.0
+      --port 5000
+    volumes:
+      - mlflow_data:/mlruns
+
+volumes:
+  mlflow_data:

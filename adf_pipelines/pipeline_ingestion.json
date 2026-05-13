@@ -1,0 +1,67 @@
+// adf_pipelines/pipeline_ingestion.json
+{
+  "name": "PL_RealEstate_FullIngestion",
+  "properties": {
+    "description": "Pipeline diário completo: FipeZAP + IBGE → Medallion → ML",
+    "activities": [
+      {
+        "name": "Ingest_IBGE",
+        "type": "AzureFunctionActivity",
+        "dependsOn": [],
+        "typeProperties": {
+          "functionAppUrl": "@pipeline().parameters.functionAppUrl",
+          "functionName": "ibge_ingestion",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Ingest_FipeZAP",
+        "type": "AzureFunctionActivity",
+        "dependsOn": [],
+        "typeProperties": {
+          "functionAppUrl": "@pipeline().parameters.functionAppUrl",
+          "functionName": "fipezap_ingestion",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Bronze_to_Silver",
+        "type": "AzureFunctionActivity",
+        "dependsOn": [
+          { "activity": "Ingest_IBGE",    "dependencyConditions": ["Succeeded"] },
+          { "activity": "Ingest_FipeZAP", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "functionAppUrl": "@pipeline().parameters.functionAppUrl",
+          "functionName": "bronze_to_silver",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Silver_to_Gold",
+        "type": "AzureFunctionActivity",
+        "dependsOn": [
+          { "activity": "Bronze_to_Silver", "dependencyConditions": ["Succeeded"] }
+        ],
+        "typeProperties": {
+          "functionAppUrl": "@pipeline().parameters.functionAppUrl",
+          "functionName": "silver_to_gold",
+          "method": "POST"
+        }
+      },
+      {
+        "name": "Run_ML_Forecasts",
+        "type": "AzureMLExecutePipelineActivity",
+        "dependsOn": [
+          { "activity": "Silver_to_Gold", "dependencyConditions": ["Succeeded"] }
+        ]
+      }
+    ],
+    "parameters": {
+      "functionAppUrl": {
+        "type": "String",
+        "defaultValue": "https://func-realestate-dev.azurewebsites.net"
+      }
+    }
+  }
+}
