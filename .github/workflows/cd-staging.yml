@@ -1,0 +1,252 @@
+# .github/workflows/cd-staging.yml
+# ─────────────────────────────────────────────────────────────────
+# CD Staging — push para main → deploy automático no slot staging
+# Usa OIDC (sem secrets de longa duração) conforme Microsoft guidance
+# ─────────────────────────────────────────────────────────────────
+
+name: 🟡 CD — Deploy Staging
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:          # permite trigger manual
+
+permissions:
+  id-token: write             # OBRIGATÓRIO para OIDC
+  contents: read
+  deployments: write
+
+env:
+  PYTHON_VERSION: "3.11"
+  AZURE_RG: rg-real-estate-analysis
+  API_APP_NAME: realestate-api-dev
+  DASHBOARD_APP_NAME: realestate-dashboard-dev
+  SLOT_NAME: staging
+  FUNC_APP_NAME: realestate-functions-dev
+
+# ─────────────────────────────────────────────────────────────────
+jobs:
+
+  # ── 1. Build & Package ────────────────────────────────────────
+  build:
+    name: 📦 Build & Package
+    runs-on: ubuntu-latest
+    outputs:
+      version: \${{ steps.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: \${{ env.PYTHON_VERSION }}
+          cache: pip
+
+      - name: Instala dependências
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Gera versão da build
+        id: version
+        run: |
+          VERSION="\$(date +%Y%m%d)-\$(git rev-parse --short HEAD)"
+          echo "version=\$VERSION" >> "\$GITHUB_OUTPUT"
+          echo "🏷️ Versão: \$VERSION"
+
+      - name: Roda testes antes do deploy
+        env:
+          ENVIRONMENT: test
+          AZURE_STORAGE_ACCOUNT: ""
+          KEY_VAULT_URI: ""
+        run: |
+          pip install pytest pytest-asyncio pytest-mock httpx
+          pytest tests/ -q -m "not integration" --tb=short
+
+      - name: Empacota aplicação (ZIP)
+        run: |
+          zip -r app-api.zip . \
+            -x "*.git*" \
+            -x "*__pycache__*" \
+            -x "*.venv*" \
+            -x ".pytest_cache*" \
+            -x "tests/*" \
+            -x "infra/*" \
+            -x "*.md" \
+            -x "docker-compose*" \
+            -x "Dockerfile" \
+            -x ".env*"
+
+      - name: Upload artefato API
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-package-\${{ steps.version.outputs.version }}
+          path: app-api.zip
+          retention-days: 7
+
+  # ── 2. Deploy API → Staging Slot ─────────────────────────────
+  deploy-api-staging:
+    name: 🚀 Deploy API → Staging
+    runs-on: ubuntu-latest
+    needs: build
+    environment:
+      name: staging
+      url: https://\${{ env.API_APP_NAME }}-staging.azurewebsites.net
+
+    steps:
+      - name: Download artefato
+        uses: actions/download-artifact@v4
+        with:
+          name: api-package-\${{ needs.build.outputs.version }}
+
+      # Login via OIDC — sem senha armazenada
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: \${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: \${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: \${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy API para slot staging
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: \${{ env.API_APP_NAME }}
+          slot-name: \${{ env.SLOT_NAME }}
+          package: app-api.zip
+
+      - name: Configura startup command (Gunicorn + Uvicorn workers)
+        uses: azure/appservice-settings@v1
+        with:
+          app-name: \${{ env.API_APP_NAME }}
+          slot-name: \${{ env.SLOT_NAME }}
+          app-settings-json: |
+            [
+              {
+                "name": "ENVIRONMENT",
+                "value": "staging",
+                "slotSetting": true
+              },
+              {
+                "name": "SCM_DO_BUILD_DURING_DEPLOYMENT",
+                "value": "true"
+              }
+            ]
+
+      - name: Configura startup command
+        run: |
+          az webapp config set \
+            --resource-group \${{ env.AZURE_RG }} \
+            --name \${{ env.API_APP_NAME }} \
+            --slot \${{ env.SLOT_NAME }} \
+            --startup-file "gunicorn -k uvicorn.workers.UvicornWorker \
+              -w 2 -b 0.0.0.0:8000 --timeout 120 api.main:app"
+
+  # ── 3. Smoke Tests no Staging ────────────────────────────────
+  smoke-tests:
+    name: 💨 Smoke Tests — Staging
+    runs-on: ubuntu-latest
+    needs: deploy-api-staging
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: \${{ env.PYTHON_VERSION }}
+
+      - name: Instala httpx
+        run: pip install httpx pytest
+
+      - name: Aguarda app aquecer (warm-up)
+        run: sleep 30
+
+      - name: Health check
+        run: |
+          python - <<'EOF'
+          import httpx, sys, time
+
+          BASE = "https://\${{ env.API_APP_NAME }}-staging.azurewebsites.net"
+          MAX_RETRIES = 5
+
+          for i in range(MAX_RETRIES):
+              try:
+                  r = httpx.get(f"{BASE}/", timeout=15)
+                  if r.status_code == 200:
+                      print(f"✅ Health check OK: {r.json()}")
+                      sys.exit(0)
+              except Exception as e:
+                  print(f"⏳ Tentativa {i+1}/{MAX_RETRIES}: {e}")
+                  time.sleep(10)
+
+          print("❌ Health check falhou após todas as tentativas")
+          sys.exit(1)
+          EOF
+
+      - name: Testa endpoints críticos
+        run: |
+          python - <<'EOF'
+          import httpx, sys
+
+          BASE = "https://\${{ env.API_APP_NAME }}-staging.azurewebsites.net"
+          endpoints = [
+              ("/", 200),
+              ("/regioes", 200),
+              ("/mercado/resumo", 200),
+              ("/docs", 200),
+              ("/openapi.json", 200),
+          ]
+
+          falhas = []
+          for path, expected in endpoints:
+              r = httpx.get(f"{BASE},{path}", timeout=20)
+              status = "✅" if r.status_code == expected else "❌"
+              print(f"{status} {path} → HTTP {r.status_code}")
+              if r.status_code != expected:
+                  falhas.append(path)
+
+          if falhas:
+              print(f"\n❌ Falhas: {falhas}")
+              sys.exit(1)
+          print("\n✅ Todos os endpoints OK!")
+          EOF
+
+  # ── 4. Swap Staging → Production ─────────────────────────────
+  swap-to-production:
+    name: 🔄 Swap Staging → Production
+    runs-on: ubuntu-latest
+    needs: smoke-tests
+    environment:
+      name: production
+      url: https://\${{ env.API_APP_NAME }}.azurewebsites.net
+
+    steps:
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: \${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: \${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: \${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Swap slots (staging → production)
+        run: |
+          az webapp deployment slot swap \
+            --resource-group \${{ env.AZURE_RG }} \
+            --name \${{ env.API_APP_NAME }} \
+            --slot \${{ env.SLOT_NAME }} \
+            --target-slot production
+
+          echo "✅ Swap concluído!"
+          echo "🌐 URL: https://\${{ env.API_APP_NAME }}.azurewebsites.net"
+
+      - name: Notifica deploy concluído
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: context.sha,
+              state: 'success',
+              description: 'Deploy para produção concluído!',
+              context: 'cd/production'
+            })
