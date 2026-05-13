@@ -1,0 +1,60 @@
+# .github/workflows/security-scan.yml
+name: 🔒 Security Scan
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'     # toda segunda-feira às 06h
+  workflow_dispatch:
+
+jobs:
+  dependency-audit:
+    name: 🔍 Dependências
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: |
+          pip install pip-audit safety bandit
+          pip install -r requirements.txt
+
+      - name: pip-audit — vulnerabilidades de pacotes
+        run: pip-audit --requirement requirements.txt --format json \
+               --output audit-report.json || true
+
+      - name: Safety — CVE check
+        run: safety check -r requirements.txt --json \
+               --output safety-report.json || true
+
+      - name: Bandit — análise estática de segurança
+        run: |
+          bandit -r api/ ingestion/ processing/ ml/ \
+            -f json -o bandit-report.json \
+            -ll --skip B101 || true   # B101 = assert (OK em testes)
+
+      - name: Upload relatórios
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-\${{ github.run_id }}
+          path: |
+            audit-report.json
+            safety-report.json
+            bandit-report.json
+          retention-days: 90
+
+  secret-scan:
+    name: 🔑 Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: TruffleHog — busca segredos no histórico
+        uses: trufflesecurity/trufflehog@main
+        with:
+          path: ./
+          base: \${{ github.event.repository.default_branch }}
+          extra_args: --only-verified
