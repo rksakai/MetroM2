@@ -1,0 +1,79 @@
+# .github/workflows/infra-deploy.yml
+name: 🏗️ Infra — Deploy Bicep
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'infra/**'            # só aciona quando infra muda
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Ambiente alvo
+        required: true
+        default: dev
+        type: choice
+        options: [ dev, staging, prod ]
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_RG: rg-real-estate-analysis
+
+jobs:
+  validate:
+    name: ✅ Valida Bicep
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: \${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: \${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: \${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Valida template Bicep (what-if)
+        run: |
+          az deployment group what-if \
+            --resource-group \${{ env.AZURE_RG }} \
+            --template-file infra/main.bicep \
+            --parameters @infra/parameters.json \
+            --result-format FullResourcePayloads
+
+  deploy-infra:
+    name: 🚀 Deploy Infraestrutura
+    runs-on: ubuntu-latest
+    needs: validate
+    environment:
+      name: \${{ inputs.environment || 'dev' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: \${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: \${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: \${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Deploy Bicep
+        id: deploy
+        run: |
+          az deployment group create \
+            --resource-group \${{ env.AZURE_RG }} \
+            --template-file infra/main.bicep \
+            --parameters @infra/parameters.json \
+            --parameters environment=\${{ inputs.environment || 'dev' }} \
+            --output json | tee deploy-output.json
+
+      - name: Mostra outputs do deploy
+        run: |
+          echo "🌐 Web App URL:"
+          cat deploy-output.json | python3 -c \
+            "import json,sys; o=json.load(sys.stdin); \
+             print(o['properties']['outputs'].get('webAppUrl',{}).get('value','N/A'))"
