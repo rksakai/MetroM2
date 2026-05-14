@@ -7,3 +7,4 @@
 │   └── infra-deploy.yml        # Deploy infraestrutura Bicep
 ├── CODEOWNERS
 └── pull_request_template.md
+
