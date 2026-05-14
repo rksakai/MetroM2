@@ -1,0 +1,495 @@
+// ═══════════════════════════════════════════════════════════════
+// REAL ESTATE MARKET ANALYSIS — MEDIDAS DAX COMPLETAS
+// Organização: pastas por domínio
+// Convenção: [Métrica] = medida explícita; sem medidas implícitas
+// ═══════════════════════════════════════════════════════════════
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Preços — Métricas de preço/m²
+// ───────────────────────────────────────────────────────────────
+
+[Preço Médio Venda] :=
+    AVERAGEX(
+        SUMMARIZE(
+            fact_precos,
+            dim_cidade[cidade],
+            "ult_preco", LASTNONBLANKVALUE(dim_data[data], AVERAGE(fact_precos[preco_m2_venda]))
+        ),
+        [ult_preco]
+    )
+
+
+[Preço Mediano Venda] :=
+    MEDIANX(
+        VALUES(dim_cidade[cidade]),
+        CALCULATE(
+            LASTNONBLANKVALUE(dim_data[data], AVERAGE(fact_precos[preco_m2_venda]))
+        )
+    )
+
+
+[Preço Atual Venda] :=
+    CALCULATE(
+        AVERAGE(fact_precos[preco_m2_venda]),
+        LASTDATE(dim_data[data])
+    )
+
+
+[Preço Atual Aluguel] :=
+    CALCULATE(
+        AVERAGE(fact_precos[preco_m2_aluguel]),
+        LASTDATE(dim_data[data])
+    )
+
+
+[Preço Mínimo Período] :=
+    MIN(fact_precos[preco_m2_venda])
+
+
+[Preço Máximo Período] :=
+    MAX(fact_precos[preco_m2_venda])
+
+
+[Range de Preços] :=
+    [Preço Máximo Período] - [Preço Mínimo Período]
+
+
+[Desvio Padrão Preço] :=
+    STDEV.P(fact_precos[preco_m2_venda])
+
+
+[Coeficiente de Variação %] :=
+    DIVIDE(
+        [Desvio Padrão Preço],
+        [Preço Atual Venda],
+        BLANK()
+    ) * 100
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Variações — Variações de preço
+// ───────────────────────────────────────────────────────────────
+
+[Preço Mês Anterior] :=
+    CALCULATE(
+        AVERAGE(fact_precos[preco_m2_venda]),
+        DATEADD(dim_data[data], -1, MONTH)
+    )
+
+
+[Variação MoM R\$] :=
+    [Preço Atual Venda] - [Preço Mês Anterior]
+
+
+[Variação MoM %] :=
+    DIVIDE(
+        [Variação MoM R\$],
+        [Preço Mês Anterior],
+        BLANK()
+    ) * 100
+
+
+[Preço 3 Meses Atrás] :=
+    CALCULATE(
+        AVERAGE(fact_precos[preco_m2_venda]),
+        DATEADD(dim_data[data], -3, MONTH)
+    )
+
+
+[Variação 3M %] :=
+    DIVIDE(
+        [Preço Atual Venda] - [Preço 3 Meses Atrás],
+        [Preço 3 Meses Atrás],
+        BLANK()
+    ) * 100
+
+
+[Preço 12 Meses Atrás] :=
+    CALCULATE(
+        AVERAGE(fact_precos[preco_m2_venda]),
+        DATEADD(dim_data[data], -12, MONTH)
+    )
+
+
+[Variação 12M %] :=
+    DIVIDE(
+        [Preço Atual Venda] - [Preço 12 Meses Atrás],
+        [Preço 12 Meses Atrás],
+        BLANK()
+    ) * 100
+
+
+[Variação YTD %] :=
+    VAR preco_jan =
+        CALCULATE(
+            AVERAGE(fact_precos[preco_m2_venda]),
+            STARTOFYEAR(dim_data[data])
+        )
+    RETURN
+        DIVIDE(
+            [Preço Atual Venda] - preco_jan,
+            preco_jan,
+            BLANK()
+        ) * 100
+
+
+[Variação 2 Anos %] :=
+    DIVIDE(
+        [Preço Atual Venda] -
+        CALCULATE(
+            AVERAGE(fact_precos[preco_m2_venda]),
+            DATEADD(dim_data[data], -24, MONTH)
+        ),
+        CALCULATE(
+            AVERAGE(fact_precos[preco_m2_venda]),
+            DATEADD(dim_data[data], -24, MONTH)
+        ),
+        BLANK()
+    ) * 100
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Rentabilidade — Cap rate e retorno
+// ───────────────────────────────────────────────────────────────
+
+[Cap Rate Anual %] :=
+    CALCULATE(
+        AVERAGE(fact_precos[cap_rate_anual]),
+        LASTDATE(dim_data[data])
+    ) * 100
+
+
+[Cap Rate Médio Período %] :=
+    AVERAGE(fact_precos[cap_rate_anual]) * 100
+
+
+[Yield Mensal %] :=
+    DIVIDE(
+        [Preço Atual Aluguel],
+        [Preço Atual Venda],
+        BLANK()
+    ) * 100
+
+
+[Payback Investimento (anos)] :=
+    DIVIDE(
+        [Preço Atual Venda],
+        [Preço Atual Aluguel] * 12,
+        BLANK()
+    )
+
+
+[ROI Anual Estimado %] :=
+    [Cap Rate Anual %] + [Variação 12M %]
+
+
+[ROI Acumulado 5 Anos % (estimado)] :=
+    VAR cap_r = [Cap Rate Anual %] / 100
+    VAR val_r = [Variação 12M %] / 100
+    VAR retorno_anual = 1 + cap_r + val_r
+    RETURN
+        (POWER(retorno_anual, 5) - 1) * 100
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Benchmark — Comparações nacionais e regionais
+// ───────────────────────────────────────────────────────────────
+
+[Preço Médio Nacional] :=
+    CALCULATE(
+        AVERAGEX(
+            VALUES(dim_cidade[cidade]),
+            CALCULATE(
+                LASTNONBLANKVALUE(dim_data[data], AVERAGE(fact_precos[preco_m2_venda]))
+            )
+        ),
+        ALL(dim_cidade)
+    )
+
+
+[Preço vs Média Nacional %] :=
+    DIVIDE(
+        [Preço Atual Venda] - [Preço Médio Nacional],
+        [Preço Médio Nacional],
+        BLANK()
+    ) * 100
+
+
+[Cap Rate vs Média Nacional (pp)] :=
+    [Cap Rate Anual %] -
+    CALCULATE(
+        AVERAGEX(
+            VALUES(dim_cidade[cidade]),
+            CALCULATE(
+                AVERAGE(fact_precos[cap_rate_anual])
+            )
+        ),
+        ALL(dim_cidade)
+    ) * 100
+
+
+[Ranking Preço Nacional] :=
+    RANKX(
+        ALL(dim_cidade[cidade]),
+        CALCULATE(
+            LASTNONBLANKVALUE(dim_data[data], AVERAGE(fact_precos[preco_m2_venda]))
+        ),
+        ,
+        DESC,
+        DENSE
+    )
+
+
+[Ranking Cap Rate Nacional] :=
+    RANKX(
+        ALL(dim_cidade[cidade]),
+        CALCULATE(AVERAGE(fact_precos[cap_rate_anual])),
+        ,
+        DESC,
+        DENSE
+    )
+
+
+[Ranking Score Investimento] :=
+    RANKX(
+        ALL(dim_cidade[cidade]),
+        CALCULATE(AVERAGE(fact_precos[score_investimento])),
+        ,
+        DESC,
+        DENSE
+    )
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Forecast — Previsões e projeções
+// ───────────────────────────────────────────────────────────────
+
+[Preço Previsto Próx. Mês] :=
+    CALCULATE(
+        AVERAGE(fact_forecasts[preco_previsto]),
+        TOPN(1, VALUES(dim_data[data]), dim_data[data], ASC)
+    )
+
+
+[Preço Previsto 6 Meses] :=
+    CALCULATE(
+        LASTNONBLANKVALUE(
+            dim_data[data],
+            AVERAGE(fact_forecasts[preco_previsto])
+        ),
+        DATEADD(LASTDATE(dim_data[data]), 6, MONTH)
+    )
+
+
+[Preço Previsto 12 Meses] :=
+    CALCULATE(
+        LASTNONBLANKVALUE(
+            dim_data[data],
+            AVERAGE(fact_forecasts[preco_previsto])
+        ),
+        DATEADD(LASTDATE(dim_data[data]), 12, MONTH)
+    )
+
+
+[Variação Prevista 12M %] :=
+    DIVIDE(
+        [Preço Previsto 12 Meses] - [Preço Atual Venda],
+        [Preço Atual Venda],
+        BLANK()
+    ) * 100
+
+
+[Amplitude IC 95% Médio] :=
+    AVERAGEX(
+        fact_forecasts,
+        fact_forecasts[limite_superior] - fact_forecasts[limite_inferior]
+    )
+
+
+[MAPE Modelo %] :=
+    AVERAGEX(
+        VALUES(dim_cidade[cidade]),
+        CALCULATE(AVERAGE(fact_forecasts[mape]))
+    )
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Score — Score de investimento
+// ───────────────────────────────────────────────────────────────
+
+[Score Investimento Atual] :=
+    CALCULATE(
+        AVERAGE(fact_precos[score_investimento]),
+        LASTDATE(dim_data[data])
+    )
+
+
+[Score Médio Nacional] :=
+    CALCULATE(
+        AVERAGEX(
+            VALUES(dim_cidade[cidade]),
+            CALCULATE(
+                LASTNONBLANKVALUE(dim_data[data], AVERAGE(fact_precos[score_investimento]))
+            )
+        ),
+        ALL(dim_cidade)
+    )
+
+
+[Score vs Média (dif.)] :=
+    [Score Investimento Atual] - [Score Médio Nacional]
+
+
+[Cidades Muito Aquecidas] :=
+    CALCULATE(
+        DISTINCTCOUNT(dim_cidade[cidade]),
+        dim_categoria_mercado[categoria] = "Muito Aquecido"
+    )
+
+
+[Cidades Aquecidas] :=
+    CALCULATE(
+        DISTINCTCOUNT(dim_cidade[cidade]),
+        dim_categoria_mercado[categoria] = "Aquecido"
+    )
+
+
+[Cidades Estáveis] :=
+    CALCULATE(
+        DISTINCTCOUNT(dim_cidade[cidade]),
+        dim_categoria_mercado[categoria] = "Estável"
+    )
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Médias Móveis — Suavização e tendência
+// ───────────────────────────────────────────────────────────────
+
+[Média Móvel 3M Preço] :=
+    AVERAGEX(
+        DATESINPERIOD(dim_data[data], LASTDATE(dim_data[data]), -3, MONTH),
+        CALCULATE(AVERAGE(fact_precos[preco_m2_venda]))
+    )
+
+
+[Média Móvel 6M Preço] :=
+    AVERAGEX(
+        DATESINPERIOD(dim_data[data], LASTDATE(dim_data[data]), -6, MONTH),
+        CALCULATE(AVERAGE(fact_precos[preco_m2_venda]))
+    )
+
+
+[Média Móvel 12M Preço] :=
+    AVERAGEX(
+        DATESINPERIOD(dim_data[data], LASTDATE(dim_data[data]), -12, MONTH),
+        CALCULATE(AVERAGE(fact_precos[preco_m2_venda]))
+    )
+
+
+[Sinal Tendência] :=
+    VAR mm3 = [Média Móvel 3M Preço]
+    VAR mm6 = [Média Móvel 6M Preço]
+    RETURN
+        SWITCH(
+            TRUE(),
+            mm3 > mm6 * 1.01, "📈 Alta",
+            mm3 < mm6 * 0.99, "📉 Queda",
+            "➡️ Estável"
+        )
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Formatação — Medidas auxiliares para labels e KPIs
+// ───────────────────────────────────────────────────────────────
+
+[Label Preço Venda] :=
+    "R\$ " & FORMAT([Preço Atual Venda], "#,##0") & "/m²"
+
+
+[Label Variação 12M] :=
+    FORMAT([Variação 12M %], "+0.0%;-0.0%;0.0%")
+
+
+[Label Cap Rate] :=
+    FORMAT([Cap Rate Anual %], "0.00") & "% a.a."
+
+
+[Label Score] :=
+    FORMAT([Score Investimento Atual], "0") & "/100"
+
+
+[Label Payback] :=
+    FORMAT([Payback Investimento (anos)], "0.0") & " anos"
+
+
+[Cor Variação 12M] :=
+    IF([Variação 12M %] >= 0, "#4CAF50", "#F44336")
+
+
+[Ícone Variação MoM] :=
+    SWITCH(
+        TRUE(),
+        [Variação MoM %] >  1, "⬆️ " & FORMAT([Variação MoM %], "+0.0%"),
+        [Variação MoM %] < -1, "⬇️ " & FORMAT([Variação MoM %], "0.0%"),
+        "➡️ " & FORMAT([Variação MoM %], "+0.0%")
+    )
+
+
+[Categoria Investimento Label] :=
+    VAR score = [Score Investimento Atual]
+    RETURN
+        SWITCH(
+            TRUE(),
+            score >= 70, "🔴 Muito Aquecido",
+            score >= 50, "🟠 Aquecido",
+            score >= 30, "🟡 Moderado",
+            "🟢 Estável"
+        )
+
+
+// ───────────────────────────────────────────────────────────────
+// 📁 PASTA: Análise de Período — Para comparações de intervalo
+// ───────────────────────────────────────────────────────────────
+
+[Total Meses Analisados] :=
+    DATEDIFF(
+        MIN(dim_data[data]),
+        MAX(dim_data[data]),
+        MONTH
+    ) + 1
+
+
+[Melhor Mês Preço] :=
+    CALCULATE(
+        MAX(dim_data[data_mmm_aaaa]),
+        TOPN(1, VALUES(dim_data[data]), [Preço Atual Venda], DESC)
+    )
+
+
+[Pior Mês Preço] :=
+    CALCULATE(
+        MAX(dim_data[data_mmm_aaaa]),
+        TOPN(1, VALUES(dim_data[data]), [Preço Atual Venda], ASC)
+    )
+
+
+[Meses Valorizando] :=
+    COUNTROWS(
+        FILTER(
+            SUMMARIZE(
+                fact_precos,
+                dim_data[data],
+                "variacao", AVERAGE(fact_precos[variacao_mensal])
+            ),
+            [variacao] > 0
+        )
+    )
+
+
+[% Meses Positivos] :=
+    DIVIDE(
+        [Meses Valorizando],
+        [Total Meses Analisados],
+        BLANK()
+    ) * 100

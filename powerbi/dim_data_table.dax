@@ -1,0 +1,27 @@
+// powerbi/dim_data_table.dax
+// Tabela dim_data — calendário completo com todos os atributos
+
+dim_data =
+VAR _inicio = DATE(2020, 1, 1)
+VAR _fim     = EOMONTH(TODAY(), 24)   // inclui janela de forecast
+RETURN
+ADDCOLUMNS(
+    CALENDAR(_inicio, _fim),
+    "data_id",        FORMAT([Date], "YYYYMM"),
+    "ano",            YEAR([Date]),
+    "trimestre",      "T" & QUARTER([Date]),
+    "mes_num",        MONTH([Date]),
+    "mes_nome",       FORMAT([Date], "MMMM"),
+    "mes_abrev",      FORMAT([Date], "MMM"),
+    "mes_ano",        FORMAT([Date], "MMM/YYYY"),
+    "data_mmm_aaaa",  FORMAT([Date], "MMM YYYY"),
+    "semestre",       IF(MONTH([Date]) <= 6, "S1", "S2"),
+    "dia_semana_num", WEEKDAY([Date], 2),
+    "dia_semana",     FORMAT([Date], "dddd"),
+    "eh_fim_semana",  IF(WEEKDAY([Date], 2) >= 6, TRUE(), FALSE()),
+    "ano_mes_num",    YEAR([Date]) * 100 + MONTH([Date]),
+    "eh_forecast",    IF([Date] > TODAY(), TRUE(), FALSE()),
+    "label_periodo",  IF([Date] > TODAY(),
+                         "🔮 " & FORMAT([Date], "MMM/YYYY"),
+                         FORMAT([Date], "MMM/YYYY"))
+)
